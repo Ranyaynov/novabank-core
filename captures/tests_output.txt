@@ -1,0 +1,127 @@
+##### CONTRAINTES (chaque test doit afficher ERROR) #####
+--- T1 email invalide
+ERROR:  new row for relation "customers" violates check constraint "customers_email_check"
+--- T2 client mineur
+ERROR:  new row for relation "customers" violates check constraint "customers_birth_date_check"
+--- T3 email en double
+ERROR:  duplicate key value violates unique constraint "customers_email_key"
+--- T4 solde négatif
+ERROR:  new row for relation "accounts" violates check constraint "accounts_balance_check"
+--- T5 virement vers le même compte
+ERROR:  new row for relation "transfers" violates check constraint "transfers_check"
+--- T6 montant de virement négatif
+ERROR:  new row for relation "transfers" violates check constraint "transfers_amount_check"
+--- T7 modifier une écriture
+ERROR:  Table transactions : UPDATE interdit (écritures immuables)
+--- T8 supprimer une écriture
+ERROR:  Table transactions : DELETE interdit (écritures immuables)
+--- T9 vider le grand livre
+ERROR:  cannot truncate a table referenced in a foreign key constraint
+--- T10 sortir un compte de la vue modifiable
+ERROR:  new row violates check option for view "v_active_accounts"
+##### VIREMENT OK (soldes avant / après) #####
+ account_id | balance 
+------------+---------
+          1 | 4400.00
+          2 | 4787.50
+(2 rows)
+
+CALL
+ account_id | balance 
+------------+---------
+          1 | 4390.00
+          2 | 4797.50
+(2 rows)
+
+  tx_id  | account_id |   tx_type    | amount | balance_after 
+---------+------------+--------------+--------+---------------
+ 1000001 |          1 | transfer_out |  10.00 |       4390.00
+ 1000002 |          2 | transfer_in  |  10.00 |       4797.50
+(2 rows)
+
+##### VIREMENT TROP GROS : refusé, soldes inchangés #####
+ERROR:  Solde insuffisant sur le compte 1
+ account_id | balance 
+------------+---------
+          1 | 4390.00
+          2 | 4797.50
+(2 rows)
+
+##### FRAUDE #####
+INSERT 0 1
+INSERT 0 1
+DO
+ alert_id | account_id |    rule_code    | status 
+----------+------------+-----------------+--------
+        1 |          3 | BIG_WITHDRAWAL  | open
+        2 |          4 | BURST_TRANSFERS | open
+(2 rows)
+
+##### AUDIT #####
+UPDATE 1
+ log_id |   table_name   | operation |   ancien   |  nouveau   | db_user  
+--------+----------------+-----------+------------+------------+----------
+      1 | core.customers | UPDATE    | 0600007919 | 0600000000 | postgres
+(1 row)
+
+##### OUVERTURE DE COMPTE + RELEVE #####
+ p_account_id 
+--------------
+        20001
+(1 row)
+
+ERROR:  Client inexistant ou KYC non validé
+  tx_id  | tx_type | amount | balance_after |          created_at           
+---------+---------+--------+---------------+-------------------------------
+ 1000016 | deposit | 100.00 |        100.00 | 2026-10-20 12:41:45.017697+00
+(1 row)
+
+##### VUES #####
+REFRESH MATERIALIZED VIEW
+    jour    |   tx_type    |  nb   |   total    
+------------+--------------+-------+------------
+ 2026-10-20 | deposit      |     2 |   10100.00
+ 2026-10-20 | transfer_in  |     6 |      15.00
+ 2026-10-20 | transfer_out |     6 |      15.00
+ 2026-10-20 | withdrawal   | 20001 | 5500400.00
+(4 rows)
+
+##### DROITS (les ERROR sont voulues) #####
+SET
+--- analyste lit l'email (refusé)
+ERROR:  permission denied for table customers
+--- analyste lit la vue masquée (OK)
+ customer_id | first_name | last_name |    email_masque     | birth_date | kyc_status | risk_level 
+-------------+------------+-----------+---------------------+------------+------------+------------
+           2 | Prenom2    | Nom2      | cl***@novabank.test | 1950-03-16 | pending    | medium
+           3 | Prenom3    | Nom3      | cl***@novabank.test | 1950-04-22 | rejected   | high
+(2 rows)
+
+--- analyste supprime un compte (refusé)
+ERROR:  permission denied for table accounts
+RESET
+SET
+--- support lit les écritures (refusé)
+ERROR:  permission denied for table transactions
+--- support supprime un client (refusé)
+ERROR:  permission denied for table customers
+RESET
+SET
+--- auditeur lit le journal (OK)
+ log_id |   table_name   | operation 
+--------+----------------+-----------
+      1 | core.customers | UPDATE
+      2 | core.accounts  | INSERT
+(2 rows)
+
+--- auditeur lit les écritures (refusé)
+ERROR:  permission denied for table transactions
+RESET
+SET
+--- appli lit le journal d'audit (refusé)
+ERROR:  permission denied for schema audit at character 15
+--- appli modifie un solde (refusé)
+ERROR:  permission denied for table accounts
+--- appli fait un virement (OK)
+CALL
+RESET
